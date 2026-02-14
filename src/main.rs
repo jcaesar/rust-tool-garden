@@ -1,29 +1,86 @@
-use std::ffi::CString;
+use std::{
+    ffi::OsString, fs::remove_file, os::unix::net::UnixListener as StdUnixListener, path::PathBuf,
+    process::Stdio,
+};
+
+use tokio::{
+    net::{TcpStream, UnixListener},
+    runtime::Runtime,
+};
 
 #[derive(clap::Parser, Debug)]
 struct Args {
-    #[clap(long)]
+    #[clap(long, short = 'r')]
     map_root_user: bool,
 
+    #[clap(long, short)]
+    listen: PathBuf,
+    #[clap(long, short)]
+    connect: u16,
+
     #[clap(required = true)]
-    exec: Vec<CString>,
+    exec: Vec<OsString>,
 }
 
 fn main() {
     let Args {
         map_root_user,
         exec,
+        listen,
+        connect,
     } = dbg!(clap::Parser::parse());
-    use nix::unistd::{execvp, getegid, geteuid};
-    use std::ffi::CString;
+    let connect = &*format!("127.0.0.1:{connect}").leak();
+    use nix::unistd::{getegid, geteuid};
     let (uid, gid) = (geteuid(), getegid());
+    remove_file(&listen).ok();
+    let listen = StdUnixListener::bind(listen).expect("Failed to create unix listen socket");
+    listen
+        .set_nonblocking(true)
+        .expect("Couldn't set non blocking");
     netns();
     if map_root_user {
         map_root(uid, gid);
     }
     lo_up().expect("failed to bring up loopback");
-    let exe = exec.get(0).expect("No exe path");
-    execvp::<CString>(exe, &exec).expect("Exec failed");
+    Runtime::new().expect("Spawn runtime").block_on(async {
+        spawn(exec);
+        transfer(listen, connect).await
+    });
+    unreachable!();
+}
+
+async fn transfer(listen: StdUnixListener, connect: &'static str) -> ! {
+    let listen = UnixListener::from_std(listen).expect("Convert listener");
+    loop {
+        match listen.accept().await {
+            Ok((mut stream, _addr)) => {
+                tokio::spawn(async move {
+                    let mut connect = TcpStream::connect(connect).await?;
+                    tokio::io::copy_bidirectional(&mut connect, &mut stream).await?;
+                    tokio::io::Result::Ok(())
+                    // TODO print errors
+                });
+            }
+            Err(e) => {
+                eprintln!("{e:?}");
+            }
+        }
+    }
+}
+
+fn spawn(exec: Vec<OsString>) {
+    let exe = exec.get(0).expect("No exe path - required by clap");
+    let mut exec = tokio::process::Command::new(exe)
+        .args(&exec[1..])
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("Failed to spawn command");
+    tokio::spawn(async move {
+        let res = exec.wait().await.expect("Child await failed");
+        std::process::exit(res.code().expect("Exit code missing"));
+    });
 }
 
 fn lo_up() -> Result<(), Box<dyn std::error::Error>> {

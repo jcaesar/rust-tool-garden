@@ -7,3 +7,4 @@ edition = "2024"
 clap = { version = "4.5.58", features = ["derive"] }
 neli = "0.7.4"
 nix = { version = "0.31.1", features = ["process", "sched", "user"] }
+tokio = { version = "1.49.0", features = ["full"] }
