@@ -1,11 +1,7 @@
 use std::{
-    ffi::OsString, fs::remove_file, os::unix::net::UnixListener as StdUnixListener, path::PathBuf,
-    process::Stdio,
-};
-
-use tokio::{
-    net::{TcpStream, UnixListener},
-    runtime::Runtime,
+    ffi::OsString,
+    os::unix::net::UnixListener as StdUnixListener,
+    path::{Path, PathBuf},
 };
 
 #[derive(clap::Parser, Debug)]
@@ -28,37 +24,53 @@ fn main() {
         exec,
         listen,
         connect,
-    } = dbg!(clap::Parser::parse());
+    } = clap::Parser::parse();
     let connect = &*format!("127.0.0.1:{connect}").leak();
     use nix::unistd::{getegid, geteuid};
     let (uid, gid) = (geteuid(), getegid());
-    remove_file(&listen).ok();
-    let listen = StdUnixListener::bind(listen).expect("Failed to create unix listen socket");
-    listen
-        .set_nonblocking(true)
-        .expect("Couldn't set non blocking");
+    let listen = listen_on(&listen);
     netns();
     if map_root_user {
         map_root(uid, gid);
     }
     lo_up().expect("failed to bring up loopback");
-    Runtime::new().expect("Spawn runtime").block_on(async {
-        spawn(exec);
-        transfer(listen, connect).await
-    });
+    tokio::runtime::Runtime::new()
+        .expect("Spawn runtime")
+        .block_on(async {
+            spawn(exec);
+            transfer(listen, connect).await
+        });
     unreachable!();
 }
 
+fn listen_on(listen: &Path) -> StdUnixListener {
+    std::fs::remove_file(&listen).ok();
+    let listen = StdUnixListener::bind(listen).expect("Failed to create unix listen socket");
+    listen
+        .set_nonblocking(true)
+        .expect("Couldn't set non blocking");
+    listen
+}
+
 async fn transfer(listen: StdUnixListener, connect: &'static str) -> ! {
-    let listen = UnixListener::from_std(listen).expect("Convert listener");
+    use tokio::{io, net};
+    let listen = net::UnixListener::from_std(listen).expect("Convert listener");
     loop {
         match listen.accept().await {
             Ok((mut stream, _addr)) => {
                 tokio::spawn(async move {
-                    let mut connect = TcpStream::connect(connect).await?;
-                    tokio::io::copy_bidirectional(&mut connect, &mut stream).await?;
-                    tokio::io::Result::Ok(())
-                    // TODO print errors
+                    async move {
+                        let mut connect = net::TcpStream::connect(connect).await?;
+                        io::copy_bidirectional(&mut connect, &mut stream).await?;
+                        io::Result::Ok(())
+                    }
+                    .await
+                    .inspect_err(|e| {
+                        eprintln!(
+                            "{}: couldnot conenct to {connect}: {e}",
+                            env!("CARGO_PKG_NAME")
+                        )
+                    })
                 });
             }
             Err(e) => {
@@ -69,6 +81,7 @@ async fn transfer(listen: StdUnixListener, connect: &'static str) -> ! {
 }
 
 fn spawn(exec: Vec<OsString>) {
+    use std::process::Stdio;
     let exe = exec.get(0).expect("No exe path - required by clap");
     let mut exec = tokio::process::Command::new(exe)
         .args(&exec[1..])
