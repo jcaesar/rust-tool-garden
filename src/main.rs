@@ -46,7 +46,10 @@ fn main() {
         map_root(uid, gid);
     }
     lo_up().expect("failed to bring up loopback");
-    tokio::runtime::Runtime::new()
+    tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
         .expect("Spawn runtime")
         .block_on(async {
             spawn(exec);
