@@ -1,5 +1,6 @@
 use std::{
     ffi::OsString,
+    io::{PipeWriter, Read, Write as _, pipe},
     os::unix::net::UnixListener as StdUnixListener,
     path::{Path, PathBuf},
 };
@@ -16,6 +17,9 @@ struct Args {
 
     #[clap(required = true)]
     exec: Vec<OsString>,
+
+    #[clap(long, short)]
+    daemonize: bool,
 }
 
 fn main() {
@@ -24,7 +28,9 @@ fn main() {
         exec,
         listen,
         connect,
+        daemonize,
     } = clap::Parser::parse();
+    let daemonize = daemonize.then(|| unsafe { fork() });
     let connect = &*format!("127.0.0.1:{connect}").leak();
     use nix::unistd::{getegid, geteuid};
     let (uid, gid) = (geteuid(), getegid());
@@ -38,9 +44,45 @@ fn main() {
         .expect("Spawn runtime")
         .block_on(async {
             spawn(exec);
+            if let Some(mut daemonize) = daemonize {
+                tokio::task::spawn_blocking(|| {
+                    daemonize.write_all(b"0").ok();
+                    drop(daemonize);
+                })
+                .await
+                .ok();
+            }
             transfer(listen, connect).await
         });
     unreachable!();
+}
+
+/// Safety: program may not be multithreaded
+// (we could check this…)
+// would probably be better to just re-spawn self
+unsafe fn fork() -> PipeWriter {
+    use nix::{
+        sys::wait::{WaitStatus, waitpid},
+        unistd::{ForkResult, fork},
+    };
+    use std::process::exit;
+    let (mut reader, writer) = pipe().expect("Create pipe");
+    let pid = unsafe { fork() }.expect("Fork failed");
+    let child = match pid {
+        ForkResult::Child => return writer,
+        ForkResult::Parent { child } => child,
+    };
+    drop(writer);
+    let mut data = Vec::new();
+    let res = reader.read_to_end(&mut data);
+    if res.is_ok() && matches!(data.as_slice(), b"0") {
+        exit(0)
+    };
+    let wait = waitpid(child, None).expect("Wait failed");
+    match wait {
+        WaitStatus::Exited(_pid, c) => exit(c),
+        _ => panic!("Weird wait result: {wait:?}"),
+    };
 }
 
 fn listen_on(listen: &Path) -> StdUnixListener {
