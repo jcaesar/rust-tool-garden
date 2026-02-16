@@ -5,6 +5,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use tokio::time::sleep;
+
 #[derive(clap::Parser, Debug)]
 struct Args {
     #[clap(long, short = 'r')]
@@ -20,6 +22,9 @@ struct Args {
 
     #[clap(long, short)]
     daemonize: bool,
+
+    #[clap(short = 'H', long)]
+    health: Option<String>,
 }
 
 fn main() {
@@ -29,6 +34,7 @@ fn main() {
         listen,
         connect,
         daemonize,
+        health,
     } = clap::Parser::parse();
     let daemonize = daemonize.then(|| unsafe { fork() });
     let connect = &*format!("127.0.0.1:{connect}").leak();
@@ -44,6 +50,9 @@ fn main() {
         .expect("Spawn runtime")
         .block_on(async {
             spawn(exec);
+            if let Some(health) = health {
+                check_health(connect, health).await;
+            };
             if let Some(mut daemonize) = daemonize {
                 tokio::task::spawn_blocking(|| {
                     daemonize.write_all(b"0").ok();
@@ -55,6 +64,18 @@ fn main() {
             transfer(listen, connect).await
         });
     unreachable!();
+}
+
+async fn check_health(connect: &str, health: String) {
+    loop {
+        let res = reqwest::get(format!("http://{connect}{health}")).await;
+        if let Ok(res) = res {
+            if res.status().is_success() {
+                break;
+            }
+        }
+        sleep(std::time::Duration::from_millis(333)).await;
+    }
 }
 
 /// Safety: program may not be multithreaded
