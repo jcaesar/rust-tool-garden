@@ -1,5 +1,6 @@
 [package]
-name = "insul"
+name = "pnnsul"
+description = "port network namespace unix listener"
 version = "0.1.0"
 edition = "2024"
 
