@@ -8,31 +8,41 @@ use std::{
 use tokio::time::sleep;
 
 #[derive(clap::Parser, Debug)]
+#[clap(about, author, version)]
 struct Args {
-    #[clap(long, short = 'r')]
-    map_root_user: bool,
+    /// Path of the unix socket to listen on
+    socket: PathBuf,
+    /// TCP port to connect to inside the namespace    
+    port: u16,
 
-    #[clap(long, short)]
-    listen: PathBuf,
-    #[clap(long, short)]
-    connect: u16,
-
+    /// Command and arguments to be spawned
     #[clap(required = true)]
-    exec: Vec<OsString>,
+    command: Vec<OsString>,
 
+    /// Fork off into the background
     #[clap(long, short)]
     daemonize: bool,
 
+    /// Do HTTP requests inside the namespace at the following path until a healthy 2** response is returned.
+    ///
+    /// Host is 127.0.0.1 and port is given by the parameter above.
+    ///
+    /// The unix socket will be crated immediately, but it won't accept connections until the process is considered healthy, i.e. connections will wait without failing.
+    /// Forking will also wait until healthy.
     #[clap(short = 'H', long)]
     health: Option<String>,
+
+    /// Pretend to be root inside the new namespace
+    #[clap(long, short = 'r')]
+    map_root_user: bool,
 }
 
 fn main() {
     let Args {
         map_root_user,
-        exec,
-        listen,
-        connect,
+        command: exec,
+        socket: listen,
+        port: connect,
         daemonize,
         health,
     } = clap::Parser::parse();
@@ -133,7 +143,7 @@ async fn transfer(listen: StdUnixListener, connect: &'static str) -> ! {
                     .await
                     .inspect_err(|e| {
                         eprintln!(
-                            "{}: couldnot conenct to {connect}: {e}",
+                            "{}: couldn't conenct to {connect}: {e}",
                             env!("CARGO_PKG_NAME")
                         )
                     })
