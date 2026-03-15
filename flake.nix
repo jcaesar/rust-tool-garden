@@ -1,17 +1,17 @@
 {
-  outputs = {nixpkgs, ...}: {
-    packages =
-      builtins.mapAttrs (sys: pkgs: {
-        default = pkgs.callPackage ({
-          rustPlatform,
-        }:
-          rustPlatform.buildRustPackage {
-            name = "pnnsul";
-            meta.mainProgram = "pnnsul";
-            src = ./.;
-            cargoLock.lockFile = ./Cargo.lock;
-          }) {};
-      })
-      nixpkgs.legacyPackages;
+  outputs = {nixpkgs, ...}: let
+    inherit (nixpkgs.lib) genAttrs mapAttrs flip;
+  in {
+    packages = flip mapAttrs nixpkgs.legacyPackages (_: pkgs:
+      genAttrs ["pnnsul"] (
+        name:
+          pkgs.callPackage ({rustPlatform}:
+            rustPlatform.buildRustPackage {
+              inherit name;
+              meta.mainProgram = name;
+              src = ./${name}/.;
+              cargoLock.lockFile = ./${name}/Cargo.lock;
+            }) {}
+      ));
   };
 }
