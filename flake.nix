@@ -3,7 +3,7 @@
     inherit (nixpkgs.lib) genAttrs mapAttrs flip;
   in {
     packages = flip mapAttrs nixpkgs.legacyPackages (_: pkgs:
-      genAttrs ["pnnsul"] (
+      genAttrs ["pnnsul" "relarc"] (
         name:
           pkgs.callPackage ({rustPlatform}:
             rustPlatform.buildRustPackage {

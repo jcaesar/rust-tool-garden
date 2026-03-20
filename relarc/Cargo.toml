@@ -1,0 +1,12 @@
+[package]
+name = "relarc"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "relarc"
+path = "src.rs"
+
+[dependencies]
+pathdiff = "0.2.3"
+tar = "0.4.45"
